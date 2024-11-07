@@ -12,6 +12,8 @@ use std::process::Command;
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 use tokio::sync::Mutex;
+mod restore;
+use restore::restore_snapshot;
 
 // configuration structure based on the expected structure of config.toml
 #[derive(Deserialize)]
@@ -249,6 +251,7 @@ async fn main() -> std::io::Result<()> {
             .service(stats)
             .service(snapshots)
             .service(delete_snapshot)
+            .service(restore_snapshot)
     })
     .bind((server_ip, server_port))?
     .run()
