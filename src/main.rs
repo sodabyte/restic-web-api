@@ -13,7 +13,9 @@ use std::sync::Arc;
 use tempfile::NamedTempFile;
 use tokio::sync::Mutex;
 mod restore;
+mod stats;
 use restore::restore_snapshot;
+use stats::config as stats_config;
 
 // configuration structure based on the expected structure of config.toml
 #[derive(Deserialize)]
@@ -43,6 +45,7 @@ struct AppState {
 
 // error response structure for json api responses
 #[derive(serde::Serialize)]
+#[allow(dead_code)] // ignore the dead code warning
 struct ErrorResponse {
     error: String,
 }
@@ -72,42 +75,6 @@ fn load_config() -> Result<Config, Box<dyn Error>> {
     let config_contents = fs::read_to_string(config_path)?;
     let config: Config = toml::from_str(&config_contents)?;
     Ok(config)
-}
-
-// function to get stats from restic repository using the restic cli
-async fn get_restic_stats(repo_path: &str, repo_password: &str) -> Result<Value, String> {
-    // creates a temporary file to store the repository password securely
-    let mut password_file = NamedTempFile::new()
-        .map_err(|e| format!("Failed to create temp file for password: {}", e))?;
-
-    // write the password to the temporary file
-    password_file
-        .write_all(repo_password.as_bytes())
-        .map_err(|e| format!("Failed to write password to temp file: {}", e))?;
-
-    // executes the restic cli command to fetch stats in json format
-    let output = Command::new("restic")
-        .arg("-r")
-        .arg(repo_path)
-        .arg("--password-file")
-        .arg(password_file.path())
-        .arg("stats")
-        .arg("--json")
-        .output()
-        .map_err(|e| format!("Failed to execute restic: {}", e))?;
-
-    // checks if the command executed successfully
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Restic error: {}", stderr));
-    }
-
-    // parses the json output from the restic command
-    let stdout =
-        String::from_utf8(output.stdout).map_err(|e| format!("Invalid UTF-8 sequence: {}", e))?;
-    let json: Value =
-        serde_json::from_str(&stdout).map_err(|e| format!("Failed to parse JSON: {}", e))?;
-    Ok(json)
 }
 
 // executes the restic command to retrieve a list of snapshots in json format
@@ -180,17 +147,6 @@ async fn delete_restic_snapshot(
     Ok(())
 }
 
-// endpoint to retrieve restic stats (/stats)
-#[get("stats")]
-async fn stats(data: web::Data<AppState>) -> impl Responder {
-    let config = data.config.lock().await;
-
-    match get_restic_stats(&config.repository.path, &config.repository.password).await {
-        Ok(json) => HttpResponse::Ok().json(json),
-        Err(err) => HttpResponse::InternalServerError().json(ErrorResponse { error: err }),
-    }
-}
-
 // endpoint to retrieve a list of snapshots (/snapshots)
 #[get("/snapshots")]
 async fn snapshots(data: web::Data<AppState>) -> impl Responder {
@@ -248,7 +204,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(AppState {
                 config: Arc::clone(&config),
             }))
-            .service(stats)
+            .configure(stats_config)
             .service(snapshots)
             .service(delete_snapshot)
             .service(restore_snapshot)
